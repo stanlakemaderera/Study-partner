@@ -1,0 +1,6 @@
+{
+  "name": "Stanlake Focus - Deep Work & Study Tracker",
+  "description": "Clean distraction-free study companion featuring customizable timers, learning analytics, real-time social study rooms, burnout-prevention break activities, exam countdowns, and gamification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
