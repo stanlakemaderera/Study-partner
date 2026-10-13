@@ -7,9 +7,17 @@ import {
   Star, 
   Download, 
   Filter, 
-  PieChart,
-  CheckCircle,
-  TrendingUp
+  PieChart, 
+  CheckCircle, 
+  TrendingUp, 
+  FileText, 
+  Copy, 
+  Check, 
+  Flame, 
+  BookOpen, 
+  Award, 
+  Sparkles, 
+  RefreshCw 
 } from 'lucide-react';
 
 interface AnalyticsViewProps {
@@ -19,8 +27,10 @@ interface AnalyticsViewProps {
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile }) => {
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>('all');
+  const [copiedReport, setCopiedReport] = useState<boolean>(false);
+  const [lastGeneratedAt, setLastGeneratedAt] = useState<Date>(new Date());
 
-  // Compute metrics
+  // Compute all-time metrics
   const totalFocusMinutes = sessions.reduce((acc, s) => acc + s.durationMinutes, 0);
   const totalHours = (totalFocusMinutes / 60).toFixed(1);
 
@@ -30,7 +40,67 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
     .filter(s => s.startTime.startsWith(todayStr))
     .reduce((acc, s) => acc + s.durationMinutes, 0);
 
-  // Subject breakdown
+  // -------------------------------------------------------------
+  // Weekly Window Metrics (Last 7 Days)
+  // -------------------------------------------------------------
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgoIso = sevenDaysAgo.toISOString();
+
+  // Sessions in the last 7 days
+  const weeklySessions = sessions.filter(s => s.startTime >= sevenDaysAgoIso);
+  const weeklyFocusMinutes = weeklySessions.reduce((acc, s) => acc + s.durationMinutes, 0);
+  const weeklyHours = (weeklyFocusMinutes / 60).toFixed(1);
+  const weeklySessionsCount = weeklySessions.length;
+  const avgSessionMins = weeklySessionsCount > 0 ? Math.round(weeklyFocusMinutes / weeklySessionsCount) : 0;
+
+  // Weekly Subject Breakdown & Top Productive Subject
+  const weeklySubjectMap: Record<string, { minutes: number; count: number }> = {};
+  weeklySessions.forEach(s => {
+    const sub = s.subject || 'General Study';
+    if (!weeklySubjectMap[sub]) {
+      weeklySubjectMap[sub] = { minutes: 0, count: 0 };
+    }
+    weeklySubjectMap[sub].minutes += s.durationMinutes;
+    weeklySubjectMap[sub].count += 1;
+  });
+
+  const weeklySubjectsRanked = Object.keys(weeklySubjectMap).map(sub => ({
+    name: sub,
+    minutes: weeklySubjectMap[sub].minutes,
+    hours: (weeklySubjectMap[sub].minutes / 60).toFixed(1),
+    count: weeklySubjectMap[sub].count,
+    percentage: weeklyFocusMinutes > 0 ? Math.round((weeklySubjectMap[sub].minutes / weeklyFocusMinutes) * 100) : 0
+  })).sort((a, b) => b.minutes - a.minutes);
+
+  const topSubject = weeklySubjectsRanked.length > 0 ? weeklySubjectsRanked[0] : null;
+
+  // Weekly target comparison
+  const weeklyTargetMinutes = (profile.dailyGoalMinutes || 120) * 7;
+  const weeklyTargetHours = (weeklyTargetMinutes / 60).toFixed(1);
+  const weeklyGoalCompletion = Math.min(100, Math.round((weeklyFocusMinutes / weeklyTargetMinutes) * 100));
+
+  // Streak status evaluation
+  const streakDays = profile.currentStreak;
+  const streakTier = streakDays >= 7 
+    ? '🔥 Unstoppable Discipline (7+ Days)'
+    : streakDays >= 3
+      ? '⚡ Consistent Momentum (Active Streak)'
+      : streakDays > 0
+        ? '🌱 Habit Formation Stage'
+        : '💤 Ready to Initiate';
+
+  const streakAnalysis = streakDays >= profile.bestStreak && streakDays > 0
+    ? `Matches your all-time record of ${profile.bestStreak} continuous days!`
+    : `Personal best: ${profile.bestStreak} days. Keep today's block locked in.`;
+
+  // Date range formatted label
+  const rangeStartStr = sevenDaysAgo.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const rangeEndStr = now.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+
+  // -------------------------------------------------------------
+  // Overall Subject breakdown (all-time)
+  // -------------------------------------------------------------
   const subjectMap: Record<string, number> = {};
   sessions.forEach(s => {
     const sub = s.subject || 'General';
@@ -44,7 +114,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
     percent: totalFocusMinutes > 0 ? Math.round((subjectMap[sub] / totalFocusMinutes) * 100) : 0
   })).sort((a, b) => b.minutes - a.minutes);
 
-  // Last 7 days study data
+  // Last 7 days study data for bar chart
   const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const last7DaysData = [...Array(7)].map((_, i) => {
     const d = new Date();
@@ -66,12 +136,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
 
   const maxDailyMinutes = Math.max(120, ...last7DaysData.map(d => d.minutes));
 
-  // Time of day breakdown
+  // Circadian distribution
   const timeOfDay = {
-    Morning: 0,   // 6 - 12
-    Afternoon: 0, // 12 - 18
-    Evening: 0,   // 18 - 24
-    Night: 0      // 0 - 6
+    Morning: 0,
+    Afternoon: 0,
+    Evening: 0,
+    Night: 0
   };
 
   sessions.forEach(s => {
@@ -88,6 +158,57 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
     return s.subject === selectedSubjectFilter;
   });
 
+  // Report Copy to Clipboard
+  const generateReportText = () => {
+    return [
+      `====================================================`,
+      `WEEKLY FOCUS & COGNITIVE SUMMARY REPORT`,
+      `Period: ${rangeStartStr} — ${rangeEndStr}`,
+      `Scholar: ${profile.name}`,
+      `====================================================`,
+      ``,
+      `1. TOTAL FOCUS TIME:`,
+      `   • Weekly Duration: ${weeklyHours} hours (${weeklyFocusMinutes} minutes)`,
+      `   • Completed Sessions: ${weeklySessionsCount} blocks`,
+      `   • Average Block: ${avgSessionMins} minutes`,
+      `   • Target Goal Progress: ${weeklyGoalCompletion}% of ${weeklyTargetHours}h target`,
+      ``,
+      `2. MOST PRODUCTIVE SUBJECT:`,
+      `   • Leading Focus: ${topSubject ? `${topSubject.name} (${topSubject.hours}h · ${topSubject.percentage}% of weekly study)` : 'None recorded'}`,
+      `   • Total Sessions: ${topSubject ? topSubject.count : 0} blocks`,
+      ``,
+      `3. STREAK STATUS:`,
+      `   • Current Continuous Streak: ${streakDays} days`,
+      `   • Streak Health: ${streakTier}`,
+      `   • All-Time Record: ${profile.bestStreak} days`,
+      ``,
+      `4. COGNITIVE SYNTHESIS:`,
+      `   ${weeklyFocusMinutes > 0 
+        ? `You completed ${weeklyHours} hours of deliberate focus this week, with ${topSubject?.name || 'your core subject'} capturing peak attention. Your ${streakDays}-day streak demonstrates strong habit automation.` 
+        : `No focus blocks recorded yet this week. Set your timer and start your first 25m focus sprint!`}`,
+      ``,
+      `Created by Stanlake T.Maderera · Stanlake Focus`
+    ].join('\n');
+  };
+
+  const handleCopyReport = () => {
+    const text = generateReportText();
+    navigator.clipboard.writeText(text);
+    setCopiedReport(true);
+    setTimeout(() => setCopiedReport(false), 3000);
+  };
+
+  const handleDownloadReport = () => {
+    const text = generateReportText();
+    const dataStr = "data:text/plain;charset=utf-8," + encodeURIComponent(text);
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `weekly_focus_report_${todayStr}.txt`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
   const handleExportData = () => {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sessions, null, 2));
     const downloadAnchor = document.createElement('a');
@@ -100,7 +221,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
-      {/* Top Title & Export */}
+      {/* Top Title & Actions */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Learning & Cognitive Analytics</h2>
@@ -109,13 +230,162 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
           </p>
         </div>
 
-        <button
-          onClick={handleExportData}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-xs font-medium text-neutral-300 hover:text-white transition-colors cursor-pointer"
-        >
-          <Download className="w-3.5 h-3.5" />
-          <span>Export Study History</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportData}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-xs font-medium text-neutral-300 hover:text-white transition-colors cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export Raw JSON</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* WEEKLY SUMMARY REPORT (FEATURE SPOTLIGHT)                                  */}
+      {/* ========================================================================= */}
+      <div className="rounded-2xl border border-neutral-800 bg-gradient-to-b from-neutral-900/80 to-neutral-950 p-6 sm:p-7 space-y-6 shadow-xl relative overflow-hidden">
+        {/* Report Top Meta Bar */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-neutral-800/80 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-800/80 text-emerald-400">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-white">Weekly Focus Summary Report</h3>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80 uppercase">
+                  Audited
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-neutral-400 mt-0.5">
+                <span>{rangeStartStr} — {rangeEndStr}</span>
+                <span>·</span>
+                <span>Updated {lastGeneratedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLastGeneratedAt(new Date())}
+              title="Refresh Weekly Metrics"
+              className="p-2 rounded-lg border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              onClick={handleCopyReport}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-xs font-medium text-neutral-200 hover:text-white transition-colors cursor-pointer"
+            >
+              {copiedReport ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedReport ? 'Copied to Clipboard' : 'Copy Summary'}</span>
+            </button>
+
+            <button
+              onClick={handleDownloadReport}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors cursor-pointer shadow-md shadow-emerald-950/40"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download Report</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3 Core Highlight Cards: Total Focus Time, Most Productive Subject, Streak Status */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Card 1: Total Focus Time */}
+          <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-950/70 space-y-2">
+            <div className="flex items-center justify-between text-xs text-neutral-400">
+              <span className="font-semibold text-neutral-300 uppercase tracking-wider text-[11px]">
+                Total Focus Time
+              </span>
+              <Clock className="w-4 h-4 text-emerald-400" />
+            </div>
+
+            <div className="text-3xl font-mono tabular-nums font-bold text-white">
+              {weeklyHours}<span className="text-base text-neutral-400 font-sans font-normal ml-1">hrs</span>
+            </div>
+
+            <div className="space-y-1 pt-1 border-t border-neutral-900 text-xs">
+              <div className="flex items-center justify-between text-neutral-400">
+                <span>{weeklyFocusMinutes} mins · {weeklySessionsCount} sessions</span>
+                <span className="font-mono text-emerald-400">{weeklyGoalCompletion}% goal</span>
+              </div>
+              <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                  style={{ width: `${weeklyGoalCompletion}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Most Productive Subject */}
+          <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-950/70 space-y-2">
+            <div className="flex items-center justify-between text-xs text-neutral-400">
+              <span className="font-semibold text-neutral-300 uppercase tracking-wider text-[11px]">
+                Top Productive Subject
+              </span>
+              <BookOpen className="w-4 h-4 text-indigo-400" />
+            </div>
+
+            <div className="text-xl sm:text-2xl font-bold text-white truncate" title={topSubject?.name || 'None'}>
+              {topSubject ? topSubject.name : 'No Sessions Yet'}
+            </div>
+
+            <div className="pt-1 border-t border-neutral-900 text-xs text-neutral-400 flex items-center justify-between">
+              {topSubject ? (
+                <>
+                  <span className="font-mono tabular-nums">{topSubject.hours} hrs ({topSubject.count} blocks)</span>
+                  <span className="text-indigo-400 font-mono font-medium">{topSubject.percentage}% of weekly study</span>
+                </>
+              ) : (
+                <span>Complete a focus session to rank subjects</span>
+              )}
+            </div>
+          </div>
+
+          {/* Card 3: Streak Status */}
+          <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-950/70 space-y-2">
+            <div className="flex items-center justify-between text-xs text-neutral-400">
+              <span className="font-semibold text-neutral-300 uppercase tracking-wider text-[11px]">
+                Streak Status
+              </span>
+              <Flame className="w-4 h-4 text-amber-400 fill-amber-400/30" />
+            </div>
+
+            <div className="text-3xl font-mono tabular-nums font-bold text-amber-300 flex items-center gap-2">
+              <span>{streakDays}</span>
+              <span className="text-base text-neutral-400 font-sans font-normal">Days Active</span>
+            </div>
+
+            <div className="pt-1 border-t border-neutral-900 text-xs text-neutral-400 space-y-0.5">
+              <div className="text-amber-400 font-medium truncate">{streakTier}</div>
+              <div className="text-[11px] text-neutral-500 truncate">{streakAnalysis}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Executive Cognitive Debrief & Insights Paragraph */}
+        <div className="p-4 rounded-xl border border-neutral-800/80 bg-neutral-900/40 space-y-1.5">
+          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Executive Weekly Analysis & Recommendations</span>
+          </div>
+          <p className="text-xs text-neutral-300 leading-relaxed">
+            {weeklyFocusMinutes > 0 ? (
+              <>
+                Over the past 7 days, you logged <strong>{weeklyHours} hours</strong> across <strong>{weeklySessionsCount} focus blocks</strong>, averaging <strong>{avgSessionMins} minutes</strong> per block. <strong>{topSubject?.name}</strong> was your primary cognitive anchor, representing <strong>{topSubject?.percentage}%</strong> of total focused work. Your current <strong>{streakDays}-day streak</strong> indicates {streakDays >= 3 ? 'robust self-discipline and automated study routine' : 'positive early momentum'}. Maintain this daily rhythm to protect exam retention.
+              </>
+            ) : (
+              <>
+                No study sessions logged during the past 7 days. Your baseline target is <strong>{weeklyTargetHours} hours/week</strong> ({profile.dailyGoalMinutes}m daily). Begin today with a standard 25m Focus Sprint to reactivate your study streak.
+              </>
+            )}
+          </p>
+        </div>
       </div>
 
       {/* Primary KPI Metrics Grid */}
@@ -244,7 +514,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ sessions, profile 
         </div>
       </div>
 
-      {/* Time of Day Heat Breakdown */}
+      {/* Circadian Productivity Heat Breakdown */}
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 space-y-4">
         <h3 className="text-sm font-semibold text-white">Circadian Productivity Distribution</h3>
         <p className="text-xs text-neutral-400">Discover when your brain enters peak flow states during the day.</p>

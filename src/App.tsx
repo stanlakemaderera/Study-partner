@@ -9,6 +9,11 @@ import {
   Badge
 } from './types';
 import { 
+  AuthUser, 
+  NotificationSettings, 
+  AppNotification 
+} from './types/auth';
+import { 
   loadProfile, 
   saveProfile, 
   loadSessions, 
@@ -20,6 +25,18 @@ import {
   loadSubjects,
   saveSubjects
 } from './utils/storage';
+import { 
+  getActiveUser, 
+  logoutUser, 
+  syncUserDataToAccount 
+} from './utils/auth';
+import { 
+  loadNotificationSettings, 
+  saveNotificationSettings, 
+  loadNotificationHistory, 
+  saveNotificationHistory, 
+  triggerNotification 
+} from './utils/notifications';
 import { checkNewBadges, fireCelebrationConfetti } from './utils/gamification';
 import { soundEngine } from './utils/audio';
 
@@ -33,14 +50,24 @@ import { ExamCountdown } from './components/ExamCountdown';
 import { ZenOverlay } from './components/ZenOverlay';
 import { BadgesModal } from './components/BadgesModal';
 import { CreditsModal } from './components/CreditsModal';
+import { LoginPage } from './components/LoginPage';
+import { NotificationCenter } from './components/NotificationCenter';
 
 export default function App() {
-  // Global State
+  // Authentication State
+  const [authUser, setAuthUser] = useState<AuthUser | null>(getActiveUser);
+
+  // Global Study State
   const [profile, setProfile] = useState<UserProfile>(loadProfile);
   const [sessions, setSessions] = useState<FocusSession[]>(loadSessions);
   const [goals, setGoals] = useState<Goal[]>(loadGoals);
   const [exams, setExams] = useState<ExamCountdownType[]>(loadExams);
   const [subjects, setSubjects] = useState<string[]>(loadSubjects);
+
+  // Notification State
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(loadNotificationSettings);
+  const [notifications, setNotifications] = useState<AppNotification[]>(loadNotificationHistory);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
 
   // Navigation & Modals
   const [activeTab, setActiveTab] = useState<ActiveTab>('timer');
@@ -56,6 +83,122 @@ export default function App() {
   });
   const [currentTopic, setCurrentTopic] = useState<string>('');
   const [ambientSound, setAmbientSound] = useState<string | null>(null);
+
+  // Toast banner for immediate on-screen celebrations
+  const [toastMessage, setToastMessage] = useState<{ title: string; subtitle: string } | null>(null);
+
+  // Sync to account whenever study state changes
+  useEffect(() => {
+    saveProfile(profile);
+    if (authUser) {
+      syncUserDataToAccount(authUser, profile, sessions, goals, exams, subjects);
+    }
+  }, [profile, authUser]);
+
+  useEffect(() => {
+    saveSessions(sessions);
+    if (authUser) {
+      syncUserDataToAccount(authUser, profile, sessions, goals, exams, subjects);
+    }
+  }, [sessions, authUser]);
+
+  useEffect(() => {
+    saveGoals(goals);
+    if (authUser) {
+      syncUserDataToAccount(authUser, profile, sessions, goals, exams, subjects);
+    }
+  }, [goals, authUser]);
+
+  useEffect(() => {
+    saveExams(exams);
+    if (authUser) {
+      syncUserDataToAccount(authUser, profile, sessions, goals, exams, subjects);
+    }
+  }, [exams, authUser]);
+
+  useEffect(() => {
+    saveSubjects(subjects);
+    if (authUser) {
+      syncUserDataToAccount(authUser, profile, sessions, goals, exams, subjects);
+    }
+  }, [subjects, authUser]);
+
+  useEffect(() => {
+    saveNotificationSettings(notificationSettings);
+  }, [notificationSettings]);
+
+  useEffect(() => {
+    saveNotificationHistory(notifications);
+  }, [notifications]);
+
+  // Proactive Exam Countdown Reminder check on boot
+  useEffect(() => {
+    if (!authUser) return;
+
+    const now = Date.now();
+    exams.forEach(exam => {
+      const diffMs = new Date(exam.date).getTime() - now;
+      const daysLeft = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+      if (daysLeft > 0 && daysLeft <= 7) {
+        // Check if we haven't already notified about this recently
+        const recentAlert = notifications.find(
+          n => n.type === 'exam' && n.title.includes(exam.title) && (now - new Date(n.timestamp).getTime() < 86400000)
+        );
+
+        if (!recentAlert && notificationSettings.examDeadlineAlerts) {
+          const notif = triggerNotification(
+            `Final Exam Approaching: ${exam.title}`,
+            `Only ${daysLeft} days remaining! Continue your steady preparation today.`,
+            'exam',
+            notificationSettings
+          );
+          setNotifications(prev => [notif, ...prev]);
+        }
+      }
+    });
+  }, [authUser]);
+
+  // Streak verification on mount
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const lastDate = profile.lastStudyDate;
+
+    if (lastDate) {
+      const last = new Date(lastDate);
+      const cur = new Date(today);
+      const diffDays = Math.round((cur.getTime() - last.getTime()) / (1000 * 3600 * 24));
+
+      if (diffDays > 1) {
+        // Streak reset
+        setProfile(prev => ({ ...prev, currentStreak: 1, lastStudyDate: today }));
+      }
+    }
+  }, []);
+
+  const handleLoginSuccess = (user: AuthUser) => {
+    setAuthUser(user);
+    setProfile(loadProfile());
+    setSessions(loadSessions());
+    setGoals(loadGoals());
+    setExams(loadExams());
+    setSubjects(loadSubjects());
+    setNotifications(loadNotificationHistory());
+    setNotificationSettings(loadNotificationSettings());
+    showNotificationToast(`Signed in as ${user.name}`, 'All progress, streaks, and exams synchronized.');
+  };
+
+  const handleSignOut = () => {
+    logoutUser();
+    setAuthUser(null);
+  };
+
+  const showNotificationToast = (title: string, subtitle: string) => {
+    setToastMessage({ title, subtitle });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4500);
+  };
 
   // User Subject Handlers
   const handleAddSubject = (newSub: string) => {
@@ -80,50 +223,6 @@ export default function App() {
     if (currentSubject === subToDelete && updated.length > 0) {
       setCurrentSubject(updated[0]);
     }
-  };
-
-  // Notification Toast for badges or achievements
-  const [toastMessage, setToastMessage] = useState<{ title: string; subtitle: string } | null>(null);
-
-  // Auto-save on changes
-  useEffect(() => {
-    saveProfile(profile);
-  }, [profile]);
-
-  useEffect(() => {
-    saveSessions(sessions);
-  }, [sessions]);
-
-  useEffect(() => {
-    saveGoals(goals);
-  }, [goals]);
-
-  useEffect(() => {
-    saveExams(exams);
-  }, [exams]);
-
-  // Streak verification on mount
-  useEffect(() => {
-    const today = new Date().toISOString().split('T')[0];
-    const lastDate = profile.lastStudyDate;
-
-    if (lastDate) {
-      const last = new Date(lastDate);
-      const cur = new Date(today);
-      const diffDays = Math.round((cur.getTime() - last.getTime()) / (1000 * 3600 * 24));
-
-      if (diffDays > 1) {
-        // Streak broken
-        setProfile(prev => ({ ...prev, currentStreak: 1, lastStudyDate: today }));
-      }
-    }
-  }, []);
-
-  const showNotificationToast = (title: string, subtitle: string) => {
-    setToastMessage({ title, subtitle });
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 4500);
   };
 
   // Handle completed focus session
@@ -166,13 +265,24 @@ export default function App() {
     // Trigger celebration
     fireCelebrationConfetti();
 
+    // Trigger in-app & browser notification
+    if (notificationSettings.sessionEndReminders) {
+      const notif = triggerNotification(
+        `Focus Block Complete! (+${xpGained} XP)`,
+        `Logged ${newSession.durationMinutes}m of deep focus in ${newSession.subject}.`,
+        'session',
+        notificationSettings
+      );
+      setNotifications(prev => [notif, ...prev]);
+    }
+
     if (newlyUnlocked.length > 0) {
       const badge = newlyUnlocked[0];
       showNotificationToast(`Badge Unlocked: ${badge.title}!`, badge.description);
     } else {
       showNotificationToast(
         `Focus Block Complete! +${xpGained} XP`,
-        `Logged ${newSession.durationMinutes}m of deep work in ${newSession.subject}.`
+        `Logged ${newSession.durationMinutes}m in ${newSession.subject}.`
       );
     }
   };
@@ -190,6 +300,17 @@ export default function App() {
     setProfile(finalProfile);
 
     fireCelebrationConfetti();
+
+    if (notificationSettings.breakReminders) {
+      const notif = triggerNotification(
+        `Break Routine Concluded (+${xpEarned} XP)`,
+        `${activityName} — Mind and body recharged for your next focus block.`,
+        'break',
+        notificationSettings
+      );
+      setNotifications(prev => [notif, ...prev]);
+    }
+
     if (newlyUnlocked.length > 0) {
       showNotificationToast(`Badge Unlocked: ${newlyUnlocked[0].title}!`, newlyUnlocked[0].description);
     } else {
@@ -214,6 +335,13 @@ export default function App() {
     .filter(s => s.startTime.startsWith(todayStr))
     .reduce((acc, s) => acc + s.durationMinutes, 0);
 
+  // If not logged in, render the Login / Sign Up Page
+  if (!authUser) {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  const unreadNotificationsCount = notifications.filter(n => !n.read).length;
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col justify-between selection:bg-emerald-500/20 selection:text-emerald-300">
       {/* 3-Zone Clean Header */}
@@ -221,9 +349,15 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         profile={profile}
+        todayMinutes={todayMinutes}
+        onUpdateDailyGoal={(minutes) => setProfile(prev => ({ ...prev, dailyGoalMinutes: minutes }))}
+        user={authUser}
+        onSignOut={handleSignOut}
         onOpenZen={() => setIsZenOpen(true)}
         onOpenCredits={() => setIsCreditsOpen(true)}
         onOpenBadges={() => setIsBadgesOpen(true)}
+        unreadNotificationsCount={unreadNotificationsCount}
+        onOpenNotifications={() => setIsNotificationsOpen(true)}
         ambientSound={ambientSound}
         onToggleSound={handleToggleSound}
       />
@@ -321,25 +455,31 @@ export default function App() {
           <div className="flex items-center gap-4">
             <button
               onClick={() => setIsZenOpen(true)}
-              className="hover:text-neutral-200 transition-colors"
+              className="hover:text-neutral-200 transition-colors cursor-pointer"
             >
               Zen Mode
             </button>
             <button
+              onClick={() => setIsNotificationsOpen(true)}
+              className="hover:text-neutral-200 transition-colors cursor-pointer"
+            >
+              Reminders
+            </button>
+            <button
               onClick={() => setActiveTab('breaks')}
-              className="hover:text-neutral-200 transition-colors"
+              className="hover:text-neutral-200 transition-colors cursor-pointer"
             >
               Break Hub
             </button>
             <button
               onClick={() => setActiveTab('social')}
-              className="hover:text-neutral-200 transition-colors"
+              className="hover:text-neutral-200 transition-colors cursor-pointer"
             >
               Study Lounge
             </button>
             <button
               onClick={() => setIsCreditsOpen(true)}
-              className="hover:text-neutral-200 transition-colors"
+              className="hover:text-neutral-200 transition-colors cursor-pointer"
             >
               Credits & About
             </button>
@@ -370,6 +510,24 @@ export default function App() {
       <CreditsModal
         isOpen={isCreditsOpen}
         onClose={() => setIsCreditsOpen(false)}
+      />
+
+      {/* Study Reminders & Notification Center Modal */}
+      <NotificationCenter
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+        notifications={notifications}
+        onClearNotifications={() => {
+          setNotifications([]);
+          saveNotificationHistory([]);
+        }}
+        onMarkAllRead={() => {
+          const marked = notifications.map(n => ({ ...n, read: true }));
+          setNotifications(marked);
+          saveNotificationHistory(marked);
+        }}
+        settings={notificationSettings}
+        onUpdateSettings={setNotificationSettings}
       />
 
       {/* Celebration Notification Toast */}
